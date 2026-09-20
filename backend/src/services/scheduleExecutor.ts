@@ -6,6 +6,7 @@ import { scheduleService } from './scheduleService.js';
 import type { Schedule, ExecutionResult, PaymentRecipient } from '../types/schedule.js';
 import { Operation, Asset, Memo, Keypair } from '@stellar/stellar-sdk';
 import os from 'node:os';
+import type { PoolClient } from 'pg';
 
 export class ScheduleExecutor {
   private cronJob: ScheduledTask | null = null;
@@ -117,7 +118,7 @@ export class ScheduleExecutor {
 
           const executionResult = await this.executeSchedule(schedule);
 
-          await this.recordExecution(schedule.id, executionResult);
+          await this.recordExecution(schedule.id, executionResult, client);
 
           if (executionResult.success) {
             successCount++;
@@ -143,7 +144,7 @@ export class ScheduleExecutor {
                 message: error instanceof Error ? error.message : 'System error in executor',
                 details: error as any,
               },
-            });
+            }, client);
           } catch (recordError) {
             console.error(
               `[ScheduleExecutor] Failed to record execution error for schedule ID ${scheduleRow.id}:`,
@@ -152,7 +153,7 @@ export class ScheduleExecutor {
           }
         } finally {
           // Always release the claim so the row is available for the next cycle
-          await this.releaseClaim(scheduleRow.id);
+          await this.releaseClaim(scheduleRow.id, client);
         }
       }
 
@@ -172,12 +173,21 @@ export class ScheduleExecutor {
   /**
    * Release the row-level claim after execution (success or failure).
    */
-  private async releaseClaim(scheduleId: number): Promise<void> {
+  private async releaseClaim(scheduleId: number, client: PoolClient): Promise<void> {
     try {
-      await pool.query(
-        'UPDATE schedules SET locked_by = NULL, locked_at = NULL WHERE id = $1',
-        [scheduleId]
+      const result = await client.query(
+        `UPDATE schedules
+         SET locked_by = NULL, locked_at = NULL
+         WHERE id = $1 AND locked_by = $2
+         RETURNING id`,
+        [scheduleId, this.podId]
       );
+
+      if (result.rowCount !== 1) {
+        console.warn(
+          `[ScheduleExecutor] Claim for schedule ID ${scheduleId} was not released because it is no longer owned by ${this.podId}`
+        );
+      }
     } catch (error) {
       console.error(`[ScheduleExecutor] Failed to release claim for schedule ID ${scheduleId}:`, error);
     }
@@ -298,15 +308,18 @@ export class ScheduleExecutor {
    * @param scheduleId - The schedule ID
    * @param result - The execution result
    */
-  async recordExecution(scheduleId: number, result: ExecutionResult): Promise<void> {
-    const client = await pool.connect();
+  async recordExecution(
+    scheduleId: number,
+    result: ExecutionResult,
+    client?: PoolClient,
+  ): Promise<void> {
+    const ownsClient = !client;
+    const dbClient = client ?? await pool.connect();
+
     try {
-      await client.query('BEGIN');
+      await dbClient.query('BEGIN');
 
-      // Determine execution status
       const status = result.success ? 'success' : 'failed';
-
-      // Insert into execution_history
       const insertQuery = `
         INSERT INTO execution_history (
           schedule_id,
@@ -323,7 +336,7 @@ export class ScheduleExecutor {
 
       const insertValues = [
         scheduleId,
-        new Date(), // executed_at
+        new Date(),
         status,
         result.transactionHash || null,
         result.success ? JSON.stringify({ hash: result.transactionHash }) : null,
@@ -331,23 +344,21 @@ export class ScheduleExecutor {
         result.error?.details ? JSON.stringify(result.error.details) : null,
       ];
 
-      await client.query(insertQuery, insertValues);
+      await dbClient.query(insertQuery, insertValues);
 
-      // Update schedule state using ScheduleService
-      await scheduleService.updateAfterExecution(scheduleId, result);
+      // Keep execution history and schedule-state mutation on the same transaction
+      // and physical connection that owns the schedule claim.
+      await scheduleService.updateAfterExecution(scheduleId, result, dbClient);
 
-      // Clear the lock now that execution is recorded
-      await client.query(
-        'UPDATE schedules SET locked_by = NULL, locked_at = NULL WHERE id = $1',
-        [scheduleId]
-      );
-
-      await client.query('COMMIT');
+      // Commit execution state before making the schedule claim available again.
+      await dbClient.query('COMMIT');
     } catch (error) {
-      await client.query('ROLLBACK');
+      await dbClient.query('ROLLBACK');
       throw error;
     } finally {
-      client.release();
+      if (ownsClient) {
+        dbClient.release();
+      }
     }
   }
 }
