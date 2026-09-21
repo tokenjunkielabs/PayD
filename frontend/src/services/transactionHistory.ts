@@ -1,6 +1,5 @@
+import api from '../utils/api';
 import { contractService } from './contracts';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 export interface HistoryFilters {
   search: string;
@@ -34,15 +33,6 @@ function asString(value: unknown, fallback = ''): string {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   return fallback;
-}
-
-function toQuery(params: Record<string, string | number | undefined>): string {
-  const query = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === '') return;
-    query.set(key, String(value));
-  });
-  return query.toString();
 }
 
 function normalizeClassicItem(row: Record<string, unknown>): TimelineItem {
@@ -82,23 +72,18 @@ export async function fetchHistoryPage(options: {
   filters: HistoryFilters;
 }): Promise<{ items: TimelineItem[]; hasMore: boolean }> {
   const { page, limit, filters } = options;
-  const query = toQuery({
-    page,
-    limit,
-    status: filters.status || undefined,
-    employee: filters.employee || undefined,
-    asset: filters.asset || undefined,
-    startDate: filters.startDate || undefined,
-    endDate: filters.endDate || undefined,
-    search: filters.search || undefined,
+  const { data: auditPayload } = await api.get<AuditResponse>('/v1/audit', {
+    params: {
+      page,
+      limit,
+      status: filters.status || undefined,
+      employee: filters.employee || undefined,
+      asset: filters.asset || undefined,
+      startDate: filters.startDate || undefined,
+      endDate: filters.endDate || undefined,
+      search: filters.search || undefined,
+    },
   });
-
-  const auditResponse = await fetch(`${API_BASE_URL}/api/v1/audit?${query}`);
-  if (!auditResponse.ok) {
-    throw new Error(`Failed to fetch audit records (${auditResponse.status})`);
-  }
-
-  const auditPayload = (await auditResponse.json()) as AuditResponse;
   const classicItems = (auditPayload.data || []).map(normalizeClassicItem);
 
   await contractService.initialize();
@@ -112,13 +97,11 @@ export async function fetchHistoryPage(options: {
   await Promise.all(
     contractIds.map(async (contractId) => {
       try {
-        const eventResponse = await fetch(
-          `${API_BASE_URL}/api/events/${contractId}?page=1&limit=10`
-        );
-        if (!eventResponse.ok) return;
-        const payload = (await eventResponse.json()) as {
+        const { data: payload } = await api.get<{
           data?: Array<Record<string, unknown>>;
-        };
+        }>(`/events/${contractId}`, {
+          params: { page: 1, limit: 10 },
+        });
         (payload.data || []).forEach((row) => {
           contractItems.push(normalizeContractItem(contractId, row));
         });
