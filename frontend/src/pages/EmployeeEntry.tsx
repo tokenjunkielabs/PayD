@@ -21,7 +21,6 @@ interface EmployeeFormState {
 
 interface EmployeeItem {
   id: string;
-  organizationId: number;
   name: string;
   email: string;
   imageUrl?: string;
@@ -40,7 +39,6 @@ const initialFormState: EmployeeFormState = {
 
 interface BackendEmployee {
   id: number;
-  organization_id: number;
   first_name: string;
   last_name: string;
   email: string;
@@ -50,27 +48,11 @@ interface BackendEmployee {
   status: string;
 }
 
-interface PayrollRunRecord {
-  id: number;
-  batch_id: string;
-  status: 'draft' | 'pending' | 'processing' | 'completed' | 'failed';
-  period_start: string;
-  period_end: string;
-  asset_code: string;
-  created_at: string;
-}
-
 export default function EmployeeEntry() {
   const [isAdding, setIsAdding] = useState(false);
   const [formData, setFormData] = useState<EmployeeFormState>(initialFormState);
   const [employees, setEmployees] = useState<EmployeeItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [bonusEmployee, setBonusEmployee] = useState<EmployeeItem | null>(null);
-  const [bonusRun, setBonusRun] = useState<PayrollRunRecord | null>(null);
-  const [bonusAmount, setBonusAmount] = useState('');
-  const [bonusDescription, setBonusDescription] = useState('');
-  const [bonusLoading, setBonusLoading] = useState(false);
-  const [bonusError, setBonusError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{
     message: string;
     secretKey?: string;
@@ -78,7 +60,7 @@ export default function EmployeeEntry() {
     employeeName?: string;
   } | null>(null);
 
-  const { notifySuccess, notifyError } = useNotification();
+  const { notifySuccess } = useNotification();
   const { saving, lastSaved, loadSavedData } = useAutosave<EmployeeFormState>(
     'employee-entry-draft',
     formData
@@ -92,7 +74,6 @@ export default function EmployeeEntry() {
       const employeeRows = Array.isArray(response.data?.data) ? response.data.data : [];
       const mapped: EmployeeItem[] = employeeRows.map((emp: BackendEmployee) => ({
         id: String(emp.id),
-        organizationId: emp.organization_id,
         name: `${emp.first_name} ${emp.last_name}`,
         email: emp.email,
         position: emp.position ?? emp.job_title ?? 'Employee',
@@ -174,101 +155,6 @@ export default function EmployeeEntry() {
       void fetchEmployees();
     } catch (error) {
       console.error('Failed to add employee:', error);
-    }
-  };
-
-  const closeBonusModal = () => {
-    setBonusEmployee(null);
-    setBonusRun(null);
-    setBonusAmount('');
-    setBonusDescription('');
-    setBonusError(null);
-  };
-
-  const handleEmployeeClick = async (employee: EmployeeItem) => {
-    setBonusEmployee(employee);
-    setBonusRun(null);
-    setBonusAmount('');
-    setBonusDescription('');
-    setBonusError(null);
-    setBonusLoading(true);
-
-    try {
-      const response = await api.get<{
-        success: boolean;
-        data: { data: PayrollRunRecord[]; total: number };
-      }>('/v1/payroll-bonus/runs', {
-        params: {
-          organizationId: employee.organizationId,
-          page: 1,
-          limit: 50,
-        },
-      });
-
-      const eligibleRuns = (response.data?.data?.data ?? [])
-        .filter((run) => run.status === 'draft' || run.status === 'pending')
-        .sort((a, b) => {
-          const aTime = new Date(a.period_start || a.created_at).getTime();
-          const bTime = new Date(b.period_start || b.created_at).getTime();
-          return aTime - bTime;
-        });
-
-      const nextRun = eligibleRuns[0] ?? null;
-      setBonusRun(nextRun);
-      if (!nextRun) {
-        setBonusError(
-          "No draft or pending payroll run is available for this employee's organization."
-        );
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load payroll runs';
-      setBonusError(message);
-      notifyError('Could not load the next payroll run', message);
-    } finally {
-      setBonusLoading(false);
-    }
-  };
-
-  const handleBonusSubmit = async (e: React.SyntheticEvent) => {
-    e.preventDefault();
-    if (!bonusEmployee || !bonusRun) return;
-
-    const numericAmount = Number(bonusAmount);
-    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
-      setBonusError('Enter a bonus amount greater than zero.');
-      return;
-    }
-
-    setBonusLoading(true);
-    setBonusError(null);
-
-    try {
-      await api.post(
-        '/v1/payroll-bonus/items/bonus',
-        {
-          payrollRunId: bonusRun.id,
-          employeeId: Number(bonusEmployee.id),
-          amount: bonusAmount.trim(),
-          description: bonusDescription.trim() || 'Performance bonus',
-        },
-        {
-          headers: {
-            'Idempotency-Key': `performance-bonus-${bonusEmployee.id}-${bonusRun.id}-${Date.now()}`,
-          },
-        }
-      );
-
-      notifySuccess(
-        `Performance bonus added for ${bonusEmployee.name}`,
-        `Included in next payroll batch ${bonusRun.batch_id}.`
-      );
-      closeBonusModal();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to add performance bonus';
-      setBonusError(message);
-      notifyError('Performance bonus was not saved', message);
-    } finally {
-      setBonusLoading(false);
     }
   };
 
@@ -460,128 +346,9 @@ export default function EmployeeEntry() {
       ) : (
         <EmployeeList
           employees={employees}
-          onEmployeeClick={(employee: EmployeeItem) => {
-            void handleEmployeeClick(employee);
-          }}
-          onAddEmployee={(employee: EmployeeItem) => {
-            void handleEmployeeClick(employee);
-          }}
+          onEmployeeClick={(employee: EmployeeItem) => console.log('Clicked:', employee.name)}
+          onAddEmployee={(employee: EmployeeItem) => console.log('Added:', employee)}
         />
-      )}
-
-      {bonusEmployee && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="performance-bonus-title"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !bonusLoading) closeBonusModal();
-          }}
-        >
-          <div className="w-full max-w-lg rounded-2xl border border-hi bg-bg p-6 shadow-2xl">
-            <div className="mb-5 flex items-start justify-between gap-4">
-              <div>
-                <p className="mb-1 text-xs font-bold uppercase tracking-widest text-accent">
-                  One-time payroll adjustment
-                </p>
-                <h2 id="performance-bonus-title" className="text-xl font-black">
-                  Add performance bonus
-                </h2>
-                <p className="mt-1 text-sm text-muted">{bonusEmployee.name}</p>
-              </div>
-              <button
-                type="button"
-                onClick={closeBonusModal}
-                disabled={bonusLoading}
-                className="rounded-lg px-3 py-2 text-muted transition-colors hover:bg-white/5 hover:text-text disabled:opacity-50"
-                aria-label="Close performance bonus modal"
-              >
-                Close
-              </button>
-            </div>
-
-            {bonusLoading && !bonusRun ? (
-              <p className="mb-4 text-sm text-muted">Loading the next payroll run...</p>
-            ) : null}
-
-            {bonusRun ? (
-              <div className="mb-5 rounded-xl border border-accent/30 bg-accent/5 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-muted">
-                  Next scheduled payment run
-                </p>
-                <p className="mt-1 font-mono text-sm font-bold text-text">{bonusRun.batch_id}</p>
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-                  <span>Status: <b className="text-text">{bonusRun.status}</b></span>
-                  <span>
-                    Period starts:{' '}
-                    <b className="text-text">
-                      {new Date(bonusRun.period_start).toLocaleDateString()}
-                    </b>
-                  </span>
-                  <span>Asset: <b className="text-text">{bonusRun.asset_code}</b></span>
-                </div>
-              </div>
-            ) : null}
-
-            <form
-              onSubmit={(event) => {
-                void handleBonusSubmit(event);
-              }}
-              className="space-y-4"
-            >
-              <Input
-                id="performanceBonusAmount"
-                fieldSize="md"
-                label="Bonus amount"
-                name="performanceBonusAmount"
-                type="number"
-                min="0.0000001"
-                step="0.0000001"
-                value={bonusAmount}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                  setBonusAmount(event.target.value)
-                }
-                placeholder="0.00"
-                disabled={!bonusRun || bonusLoading}
-                required
-              />
-
-              <div>
-                <label
-                  htmlFor="performanceBonusDescription"
-                  className="mb-2 block text-sm font-semibold text-text"
-                >
-                  Reason / description
-                </label>
-                <textarea
-                  id="performanceBonusDescription"
-                  value={bonusDescription}
-                  onChange={(event) => setBonusDescription(event.target.value)}
-                  placeholder="e.g. Q3 launch performance award"
-                  rows={3}
-                  disabled={!bonusRun || bonusLoading}
-                  className="w-full resize-none rounded-lg border border-hi bg-black/10 px-3 py-2 text-sm text-text outline-none transition-colors focus:border-accent disabled:opacity-50"
-                />
-              </div>
-
-              {bonusError ? (
-                <div className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
-                  {bonusError}
-                </div>
-              ) : null}
-
-              <div className="flex justify-end gap-3 pt-2">
-                <Button type="button" variant="secondary" size="md" onClick={closeBonusModal} disabled={bonusLoading}>
-                  Cancel
-                </Button>
-                <Button type="submit" variant="primary" size="md" disabled={!bonusRun || bonusLoading}>
-                  {bonusLoading ? 'Saving...' : 'Add to next payroll'}
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
       )}
     </div>
   );
