@@ -1,5 +1,6 @@
 import { DateTime } from 'luxon';
 import { default as pool } from '../config/database.js';
+import type { PoolClient } from 'pg';
 import type {
   Schedule,
   ScheduleFrequency,
@@ -327,7 +328,7 @@ export class ScheduleService {
         WHERE id = $1
       `;
 
-      const selectResult = await client.query(selectQuery, [scheduleId]);
+      const selectResult = await dbClient.query(selectQuery, [scheduleId]);
 
       // Check if schedule exists
       if (selectResult.rows.length === 0) {
@@ -361,10 +362,15 @@ export class ScheduleService {
   async updateAfterExecution(
     scheduleId: number,
     executionResult: ExecutionResult,
+    client?: PoolClient,
   ): Promise<void> {
-    const client = await pool.connect();
+    const ownsClient = !client;
+    const dbClient = client ?? await pool.connect();
+
     try {
-      await client.query('BEGIN');
+      if (ownsClient) {
+        await dbClient.query('BEGIN');
+      }
 
       // Query the schedule to get its frequency and configuration
       const selectQuery = `
@@ -424,19 +430,25 @@ export class ScheduleService {
         WHERE id = $4
       `;
 
-      await client.query(updateQuery, [
+      await dbClient.query(updateQuery, [
         executionTime,
         newStatus,
         nextRunTimestamp,
         scheduleId,
       ]);
 
-      await client.query('COMMIT');
+      if (ownsClient) {
+        await dbClient.query('COMMIT');
+      }
     } catch (error) {
-      await client.query('ROLLBACK');
+      if (ownsClient) {
+        await dbClient.query('ROLLBACK');
+      }
       throw error;
     } finally {
-      client.release();
+      if (ownsClient) {
+        dbClient.release();
+      }
     }
   }
 }
