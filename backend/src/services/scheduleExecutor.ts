@@ -166,6 +166,8 @@ export class ScheduleExecutor {
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;
+    } finally {
+      client.release();
     }
   }
 
