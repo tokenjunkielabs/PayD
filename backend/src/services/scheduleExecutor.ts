@@ -6,6 +6,7 @@ import { scheduleService } from './scheduleService.js';
 import type { Schedule, ExecutionResult, PaymentRecipient } from '../types/schedule.js';
 import { Operation, Asset, Memo, Keypair } from '@stellar/stellar-sdk';
 import os from 'node:os';
+import type { PoolClient } from 'pg';
 
 export class ScheduleExecutor {
   private cronJob: ScheduledTask | null = null;
@@ -117,7 +118,7 @@ export class ScheduleExecutor {
 
           const executionResult = await this.executeSchedule(schedule);
 
-          await this.recordExecution(schedule.id, executionResult);
+          await this.recordExecution(schedule.id, executionResult, client);
 
           if (executionResult.success) {
             successCount++;
@@ -137,22 +138,23 @@ export class ScheduleExecutor {
           );
 
           try {
-            await this.recordExecution(scheduleRow.id, {
-              success: false,
-              error: {
-                message: error instanceof Error ? error.message : 'System error in executor',
-                details: error as any,
+            await this.recordExecution(
+              scheduleRow.id,
+              {
+                success: false,
+                error: {
+                  message: error instanceof Error ? error.message : 'System error in executor',
+                  details: error as any,
+                },
               },
-            });
+              client
+            );
           } catch (recordError) {
             console.error(
               `[ScheduleExecutor] Failed to record execution error for schedule ID ${scheduleRow.id}:`,
               recordError
             );
           }
-        } finally {
-          // Always release the claim so the row is available for the next cycle
-          await this.releaseClaim(scheduleRow.id);
         }
       }
 
@@ -164,22 +166,6 @@ export class ScheduleExecutor {
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  /**
-   * Release the row-level claim after execution (success or failure).
-   */
-  private async releaseClaim(scheduleId: number): Promise<void> {
-    try {
-      await pool.query(
-        'UPDATE schedules SET locked_by = NULL, locked_at = NULL WHERE id = $1',
-        [scheduleId]
-      );
-    } catch (error) {
-      console.error(`[ScheduleExecutor] Failed to release claim for schedule ID ${scheduleId}:`, error);
     }
   }
 
@@ -298,8 +284,11 @@ export class ScheduleExecutor {
    * @param scheduleId - The schedule ID
    * @param result - The execution result
    */
-  async recordExecution(scheduleId: number, result: ExecutionResult): Promise<void> {
-    const client = await pool.connect();
+  async recordExecution(
+    scheduleId: number,
+    result: ExecutionResult,
+    client: PoolClient
+  ): Promise<void> {
     try {
       await client.query('BEGIN');
 
@@ -333,14 +322,26 @@ export class ScheduleExecutor {
 
       await client.query(insertQuery, insertValues);
 
-      // Update schedule state using ScheduleService
-      await scheduleService.updateAfterExecution(scheduleId, result);
+      // Update schedule state on the same claimed connection.
+      // This keeps execution bookkeeping and the final unlock in one transaction.
+      await scheduleService.updateAfterExecution(scheduleId, result, client);
 
-      // Clear the lock now that execution is recorded
-      await client.query(
-        'UPDATE schedules SET locked_by = NULL, locked_at = NULL WHERE id = $1',
-        [scheduleId]
+      // Release exactly once, and only if this pod still owns the claim.
+      // A missing row or changed owner aborts the bookkeeping transaction instead
+      // of clearing another worker's lock.
+      const releaseResult = await client.query(
+        `UPDATE schedules
+         SET locked_by = NULL, locked_at = NULL
+         WHERE id = $1 AND locked_by = $2
+         RETURNING id`,
+        [scheduleId, this.podId]
       );
+
+      if (releaseResult.rowCount !== 1) {
+        throw new Error(
+          `Schedule ${scheduleId} lock is no longer owned by executor ${this.podId}`
+        );
+      }
 
       await client.query('COMMIT');
     } catch (error) {
