@@ -17,8 +17,10 @@ pub enum ContractError {
     Unauthorized          = 3,
     UpgradeAlreadyPending = 4,
     NoPendingUpgrade      = 5,
-    TimelockNotExpired    = 6,
-    TimestampOverflow     = 7,
+    TimelockNotExpired                 = 6,
+    TimestampOverflow                  = 7,
+    ClaimUnavailableAfterClawback      = 8,
+    ClawbackUnavailableAfterFullClaim  = 9,
 }
 
 impl From<CommonError> for ContractError {
@@ -150,54 +152,63 @@ impl VestingContract {
         client.transfer(&funder, &e.current_contract_address(), &amount);
     }
 
-    pub fn claim(e: Env) {
+    pub fn claim(e: Env) -> Result<(), ContractError> {
         let mut config: VestingConfig = e.storage().instance().get(&DataKey::Config).expect("Not initialized");
-        
+
         config.beneficiary.require_auth();
-        
+
         let vested = Self::calc_vested(&e, &config);
         let claimable = vested - config.claimed_amount;
 
         if claimable <= 0 {
-            // Nothing to claim, just return
-            return;
+            // Once clawback has capped the schedule, an exhausted grant is a
+            // terminal state rather than a silent no-op. This is what a claim
+            // observes when a full clawback wins the race.
+            if !config.is_active {
+                return Err(ContractError::ClaimUnavailableAfterClawback);
+            }
+            return Ok(());
         }
 
-        // Update state
         config.claimed_amount += claimable;
         e.storage().instance().set(&DataKey::Config, &config);
 
-        // Transfer tokens
         let client = token::Client::new(&e, &config.token);
         client.transfer(&e.current_contract_address(), &config.beneficiary, &claimable);
+        Ok(())
     }
-    
-    pub fn clawback(e: Env) {
+
+    pub fn clawback(e: Env) -> Result<(), ContractError> {
         let mut config: VestingConfig = e.storage().instance().get(&DataKey::Config).expect("Not initialized");
-        
+
         config.clawback_admin.require_auth();
-        
+
         if !config.is_active {
             panic!("Already revoked/inactive");
         }
 
-        // Calculate what has vested so far
+        // If a full claim wins the race there is nothing left for the admin to
+        // recover. Surface that terminal state explicitly instead of silently
+        // deactivating an already-settled grant.
+        if config.claimed_amount >= config.total_amount {
+            return Err(ContractError::ClawbackUnavailableAfterFullClaim);
+        }
+
         let vested = Self::calc_vested(&e, &config);
-        
-        // The unvested amount is the total scheduled minus what has vested
         let unvested = config.total_amount - vested;
-        
-        // Update config to stop future vesting
-        // We set total_amount to vested, so effectively the grant is capped at what was vested at this moment
+
+        // Freeze vesting at the amount earned when clawback lands. Anything
+        // already vested but not yet claimed remains beneficiary-owned.
         config.total_amount = vested;
         config.is_active = false;
         e.storage().instance().set(&DataKey::Config, &config);
 
         if unvested > 0 {
-            // Return unvested tokens to admin
             let client = token::Client::new(&e, &config.token);
             client.transfer(&e.current_contract_address(), &config.clawback_admin, &unvested);
         }
+
+        Ok(())
     }
 
     pub fn get_vested_amount(e: Env) -> i128 {
