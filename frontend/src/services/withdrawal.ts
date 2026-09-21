@@ -3,9 +3,7 @@
  * Handles anchor discovery, withdrawal initiation, and transaction polling.
  */
 
-import axios from 'axios';
-
-const API_BASE_URL = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3000/api';
+import api from '../utils/api';
 
 export interface AnchorInfo {
   domain: string;
@@ -60,10 +58,9 @@ const withdrawalService = {
    */
   getAvailableAnchors: async (assetCode: string = 'ORGUSD'): Promise<AnchorInfo[]> => {
     try {
-      const response = await axios.get<{ anchors: AnchorInfo[] }>(
-        `${API_BASE_URL}/withdrawal/anchors`,
-        { params: { assetCode } }
-      );
+      const response = await api.get<{ anchors: AnchorInfo[] }>('/withdrawal/anchors', {
+        params: { assetCode },
+      });
       return response.data.anchors;
     } catch {
       // Mock data for development until backend is ready
@@ -101,10 +98,7 @@ const withdrawalService = {
    */
   initiateWithdrawal: async (request: WithdrawalRequest): Promise<WithdrawalResponse> => {
     try {
-      const response = await axios.post<WithdrawalResponse>(
-        `${API_BASE_URL}/withdrawal/initiate`,
-        request
-      );
+      const response = await api.post<WithdrawalResponse>('/withdrawal/initiate', request);
       return response.data;
     } catch {
       // Mock response for development
@@ -125,8 +119,8 @@ const withdrawalService = {
     anchorDomain: string
   ): Promise<WithdrawalTransaction> => {
     try {
-      const response = await axios.get<WithdrawalTransaction>(
-        `${API_BASE_URL}/withdrawal/status/${transactionId}`,
+      const response = await api.get<WithdrawalTransaction>(
+        `/withdrawal/status/${transactionId}`,
         { params: { anchorDomain } }
       );
       return response.data;
@@ -149,7 +143,7 @@ const withdrawalService = {
    */
   cancelWithdrawal: async (transactionId: string): Promise<void> => {
     try {
-      await axios.post(`${API_BASE_URL}/withdrawal/cancel`, { transactionId });
+      await api.post('/withdrawal/cancel', { transactionId });
     } catch {
       // Mock success for development
       console.log('Mock: Withdrawal cancelled', transactionId);
