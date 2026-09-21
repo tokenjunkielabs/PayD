@@ -179,6 +179,71 @@ fn setup_upgradeable() -> UpgradeFixture {
     }
 }
 
+#[test]
+fn test_claim_after_full_clawback_returns_clear_error() {
+    let f = setup_upgradeable();
+
+    // Before the cliff, clawback is full because nothing has vested.
+    f.client.clawback();
+
+    assert_eq!(
+        f.client.try_claim(),
+        Err(Ok(ContractError::ClaimUnavailableAfterClawback))
+    );
+
+    let config = f.client.get_config();
+    assert_eq!(config.total_amount, 0);
+    assert_eq!(config.claimed_amount, 0);
+    assert!(!config.is_active);
+}
+
+#[test]
+fn test_clawback_after_full_claim_returns_clear_error() {
+    let f = setup_upgradeable();
+    let token_client = token::Client::new(&f.e, &f.token);
+
+    f.e.ledger().set_timestamp(f.start_time + 1_000);
+    f.client.claim();
+    assert_eq!(token_client.balance(&f.beneficiary), 10_000);
+
+    assert_eq!(
+        f.client.try_clawback(),
+        Err(Ok(ContractError::ClawbackUnavailableAfterFullClaim))
+    );
+
+    let config = f.client.get_config();
+    assert_eq!(config.claimed_amount, 10_000);
+    assert_eq!(config.total_amount, 10_000);
+    assert!(config.is_active);
+}
+
+#[test]
+fn test_partial_claim_before_clawback_preserves_remaining_vested_claim() {
+    let f = setup_upgradeable();
+    let token_client = token::Client::new(&f.e, &f.token);
+
+    f.e.ledger().set_timestamp(f.start_time + 200);
+    f.client.claim();
+    assert_eq!(token_client.balance(&f.beneficiary), 2_000);
+
+    f.e.ledger().set_timestamp(f.start_time + 500);
+    f.client.clawback();
+
+    let frozen = f.client.get_config();
+    assert_eq!(frozen.claimed_amount, 2_000);
+    assert_eq!(frozen.total_amount, 5_000);
+    assert!(!frozen.is_active);
+    assert_eq!(token_client.balance(&f.clawback_admin), 5_000);
+
+    // The 3_000 that vested before clawback remains claimable.
+    f.client.claim();
+    assert_eq!(token_client.balance(&f.beneficiary), 5_000);
+    assert_eq!(
+        f.client.try_claim(),
+        Err(Ok(ContractError::ClaimUnavailableAfterClawback))
+    );
+}
+
 fn new_wasm_hash(e: &Env) -> BytesN<32> {
     e.deployer()
         .upload_contract_wasm(Bytes::from_slice(e, upgraded_vesting::WASM))
