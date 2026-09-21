@@ -19,19 +19,32 @@ const VERSION_CONFIGS: Record<ApiVersion, VersionConfig> = {
 
 const CURRENT_VERSION: ApiVersion = 'v1';
 const SUPPORTED_VERSIONS: ApiVersion[] = ['v1'];
-const LEGACY_ROUTES_DEPRECATED = true;
-const LEGACY_ROUTES_SUNSET = 'Sat, 01 Jan 2027 00:00:00 GMT';
+const LEGACY_ROUTES_SUNSET = 'Fri, 01 Jan 2027 00:00:00 GMT';
+const LEGACY_DEPRECATION_MESSAGE =
+  `Legacy API routes are deprecated. Please use /api/${CURRENT_VERSION}/ instead.`;
+
+function extractRequestedVersion(path: string): string | null {
+  return path.match(/^\/api\/(v\d+)(?:\/|$)/)?.[1] ?? null;
+}
 
 export function extractApiVersion(path: string): ApiVersion | null {
-  const versionMatch = path.match(/^\/api\/(v\d+)\//);
-  if (versionMatch && SUPPORTED_VERSIONS.includes(versionMatch[1] as ApiVersion)) {
-    return versionMatch[1] as ApiVersion;
+  const requestedVersion = extractRequestedVersion(path);
+
+  if (requestedVersion && SUPPORTED_VERSIONS.includes(requestedVersion as ApiVersion)) {
+    return requestedVersion as ApiVersion;
   }
+
   return null;
 }
 
 function isLegacyRoute(path: string): boolean {
-  return path.startsWith('/api/') && !path.match(/^\/api\/v\d+\//);
+  const isApiPath = path === '/api' || path.startsWith('/api/');
+  return isApiPath && extractRequestedVersion(path) === null;
+}
+
+function successorPath(path: string): string {
+  const suffix = path.slice('/api'.length);
+  return `/api/${CURRENT_VERSION}${suffix}`;
 }
 
 export function apiVersionMiddleware(req: Request, res: Response, next: NextFunction): void {
@@ -64,19 +77,17 @@ export function apiVersionMiddleware(req: Request, res: Response, next: NextFunc
       });
     }
   } else if (isLegacyRoute(req.path)) {
+    const replacement = successorPath(req.path);
+
     res.setHeader('Deprecation', 'true');
     res.setHeader('Sunset', LEGACY_ROUTES_SUNSET);
-    res.setHeader(
-      'X-API-Deprecation-Message',
-      `Legacy API routes are deprecated. Please use /api/${CURRENT_VERSION}/ instead.`
-    );
-    res.setHeader(
-      'Link',
-      `</api/${CURRENT_VERSION}${req.path.replace('/api', '')}>; rel="successor-version"`
-    );
+    res.setHeader('Warning', `299 PayD "${LEGACY_DEPRECATION_MESSAGE}"`);
+    res.setHeader('X-API-Deprecation-Message', LEGACY_DEPRECATION_MESSAGE);
+    res.setHeader('Link', `<${replacement}>; rel="successor-version"`);
 
     logger.warn('Legacy API route accessed', {
       path: req.path,
+      replacement,
       method: req.method,
       ip: req.ip,
     });

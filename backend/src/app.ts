@@ -14,29 +14,11 @@ import { tieredOrganizationRateLimit } from './middleware/advancedRateLimiting.j
 import { rateLimitHeaders } from './middleware/rateLimitHeaders.js';
 import { syncTenantFromUser } from './middleware/tenantContext.js';
 
-// Feature Routes
+// Public and API routes
 import v1Routes from './routes/v1/index.js';
 import authRoutes from './routes/authRoutes.js';
 import webhookRoutes from './routes/webhook.routes.js';
-
-// Upstream Routes
-import payrollRoutes from './routes/payroll.routes.js';
-import employeeRoutes from './routes/employeeRoutes.js';
-import assetRoutes from './routes/assetRoutes.js';
-import paymentRoutes from './routes/paymentRoutes.js';
-import searchRoutes from './routes/searchRoutes.js';
-import contractRoutes from './routes/contractRoutes.js';
-
-// My Routes
-import scheduleRoutes from './routes/scheduleRoutes.js';
-import contractEventRoutes from './routes/contractEventRoutes.js';
-import certificateRoutes from './routes/certificateRoutes.js';
-import cashFlowForecastRoutes from './routes/cashFlowForecastRoutes.js';
 import { HealthController } from './controllers/healthController.js';
-
-// Part 49 — admin, audit integrity, per-tenant rate limits, quotas
-import adminRoutes from './routes/adminRoutes.js';
-import tenantUsageRoutes from './routes/tenantUsageRoutes.js';
 
 // Part 48 — request auditing, rate limiting, tenant security
 import { requestAuditLoggerMiddleware } from './middleware/requestAuditLogger.js';
@@ -44,9 +26,6 @@ import { organizationRateLimiter } from './middleware/organizationRateLimiter.js
 import { detectSqlInjection } from './middleware/tenantSecurityMonitor.js';
 
 // Part 45 — enhanced audit analytics, smart rate limiting, tenant security guard
-import auditAnalyticsRoutes from './routes/auditAnalyticsRoutes.js';
-import smartRateLimitRoutes from './routes/smartRateLimitRoutes.js';
-import tenantSecurityRoutes from './routes/tenantSecurityRoutes.js';
 import { enhancedAuditMiddleware } from './middleware/enhancedAuditAnalytics.js';
 import { smartRateLimitMiddleware } from './middleware/smartRateLimiter.js';
 import { tenantSecurityGuardMiddleware } from './middleware/tenantSecurityGuard.js';
@@ -55,6 +34,20 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+// Reuse the exact v1 route graph for the legacy /api alias. Version-looking
+// paths are skipped here so an unknown /api/vN endpoint cannot fall through
+// and accidentally resolve as a legacy route.
+const legacyApiAliasRouter = express.Router();
+legacyApiAliasRouter.use((req, _res, next) => {
+  if (/^\/v\d+(?:\/|$)/.test(req.path)) {
+    next('router');
+    return;
+  }
+
+  next();
+});
+legacyApiAliasRouter.use(v1Routes);
 
 // Middleware — request ID first for correlation across all layers
 app.use(requestIdMiddleware);
@@ -68,6 +61,7 @@ app.use(
     routeOverrides: {
       '/auth': { limit: 20 },
       '/api/auth': { limit: 20 },
+      '/api/v1/auth': { limit: 20 },
     },
   })
 );
@@ -136,7 +130,7 @@ app.get('/.well-known/stellar.toml', (req, res) => {
 app.get('/health', HealthController.getHealthStatus);
 app.get('/health/live', HealthController.getLiveness);
 
-// Middleware for versioning
+// Resolve API version and deprecation metadata before API security middleware.
 app.use(apiVersionMiddleware);
 
 // Part 48 — request audit logging, rate limiting, SQL injection detection
@@ -149,32 +143,14 @@ app.use('/api', enhancedAuditMiddleware({ trackPerformance: true, trackErrors: t
 app.use('/api', smartRateLimitMiddleware({ organizationBased: true }));
 app.use('/api', tenantSecurityGuardMiddleware({ detectAnomalies: true }));
 
-// Feature / PR specific routes
+// Public compatibility endpoints.
 app.use('/auth', authRoutes);
-app.use('/api/v1', v1Routes);
 app.use('/webhooks', webhookRoutes);
 
-// Upstream / Base routes
-app.use('/api/auth', authRoutes);
-app.use('/api/payroll', payrollRoutes);
-app.use('/api/employees', employeeRoutes);
-app.use('/api/assets', assetRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/search', searchRoutes);
-app.use('/api', contractRoutes);
-
-// Feature specific routes
-app.use('/api/schedules', scheduleRoutes);
-app.use('/api/events', contractEventRoutes);
-app.use('/api/certificates', certificateRoutes);
-app.use('/api/cash-flow', cashFlowForecastRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/usage', tenantUsageRoutes);
-
-// Part 45 — enhanced audit analytics, smart rate limiting, tenant security guard
-app.use('/api/audit-analytics', auditAnalyticsRoutes);
-app.use('/api/smart-rate-limit', smartRateLimitRoutes);
-app.use('/api/tenant-security', tenantSecurityRoutes);
+// One canonical API route graph. /api is a backwards-compatible alias of v1,
+// rather than a separately maintained collection of duplicate route mounts.
+app.use('/api/v1', v1Routes);
+app.use('/api', legacyApiAliasRouter);
 
 // 404 handler
 app.use((req, res) => {

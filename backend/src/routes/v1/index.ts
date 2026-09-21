@@ -21,6 +21,15 @@ import freezeRoutes from '../freezeRoutes.js';
 import contractUpgradeRoutes from '../contractUpgradeRoutes.js';
 import forecastRoutes from '../forecastRoutes.js';
 import benefitsRoutes from '../benefitsRoutes.js';
+import scheduleRoutes from '../scheduleRoutes.js';
+import contractEventRoutes from '../contractEventRoutes.js';
+import certificateRoutes from '../certificateRoutes.js';
+import cashFlowForecastRoutes from '../cashFlowForecastRoutes.js';
+import adminRoutes from '../adminRoutes.js';
+import tenantUsageRoutes from '../tenantUsageRoutes.js';
+import auditAnalyticsRoutes from '../auditAnalyticsRoutes.js';
+import smartRateLimitRoutes from '../smartRateLimitRoutes.js';
+import tenantSecurityRoutes from '../tenantSecurityRoutes.js';
 
 const router = Router();
 
@@ -44,5 +53,14 @@ router.use('/rate-limit', apiRateLimit(), rateLimitRoutes);
 router.use('/freeze', apiRateLimit(), freezeRoutes);
 router.use('/contracts', apiRateLimit(), contractUpgradeRoutes);
 router.use('/benefits', dataRateLimit(), benefitsRoutes);
+router.use('/schedules', scheduleRoutes);
+router.use('/events', contractEventRoutes);
+router.use('/certificates', certificateRoutes);
+router.use('/cash-flow', cashFlowForecastRoutes);
+router.use('/admin', adminRoutes);
+router.use('/usage', tenantUsageRoutes);
+router.use('/audit-analytics', auditAnalyticsRoutes);
+router.use('/smart-rate-limit', smartRateLimitRoutes);
+router.use('/tenant-security', tenantSecurityRoutes);
 
 export default router;
