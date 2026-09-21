@@ -1,11 +1,4 @@
-import axios from 'axios';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api/v1';
-
-function authHeaders() {
-  const token = localStorage.getItem('payd_auth_token');
-  return token ? { Authorization: `Bearer ${token}` } : undefined;
-}
+import api from '../utils/api';
 
 export interface DraftPayslipLine {
   source: 'deduction_rule' | 'tax_rule';
@@ -29,11 +22,8 @@ export interface DraftPayslip {
 }
 
 export const getMyDeductionsDraftPayslip = async (): Promise<DraftPayslip> => {
-  const { data } = await axios.get<{ success: boolean; data: DraftPayslip }>(
-    `${API_BASE_URL}/benefits/me/deductions`,
-    {
-      headers: authHeaders(),
-    }
+  const { data } = await api.get<{ success: boolean; data: DraftPayslip }>(
+    '/v1/benefits/me/deductions'
   );
 
   return data.data;
