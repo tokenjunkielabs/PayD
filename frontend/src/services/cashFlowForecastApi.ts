@@ -1,7 +1,5 @@
-import axios, { type AxiosError } from 'axios';
-
-const API_BASE_URL =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) || 'http://localhost:3001';
+import { isAxiosError, type AxiosError } from 'axios';
+import api from '../utils/api';
 
 export interface HistoricalPayrollData {
   period: string;
@@ -98,14 +96,11 @@ export interface AlertsResponse {
  */
 export const getForecast = async (params: ForecastParams): Promise<CashFlowForecast> => {
   try {
-    const response = await axios.get<ForecastResponse>(`${API_BASE_URL}/api/cash-flow/forecast`, {
+    const response = await api.get<ForecastResponse>('/cash-flow/forecast', {
       params: {
         forecastDays: params.forecastDays || 90,
         distributionAccount: params.distributionAccount,
         assetIssuer: params.assetIssuer,
-      },
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('accessToken') || ''}`,
       },
     });
 
@@ -115,7 +110,7 @@ export const getForecast = async (params: ForecastParams): Promise<CashFlowForec
 
     return response.data.data;
   } catch (error) {
-    if (axios.isAxiosError(error)) {
+    if (isAxiosError(error)) {
       const axiosError = error as AxiosError<{ message?: string }>;
       const errorMessage =
         (axiosError.response?.data as { message?: string } | undefined)?.message ||
@@ -139,17 +134,11 @@ export const getHistoricalData = async (
   averages: { weekly: number; biweekly: number; monthly: number };
 }> => {
   try {
-    const response = await axios.get<HistoricalDataResponse>(
-      `${API_BASE_URL}/api/cash-flow/historical`,
-      {
-        params: {
-          monthsBack: monthsBack || 6,
-        },
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('accessToken') || ''}`,
-        },
-      }
-    );
+    const response = await api.get<HistoricalDataResponse>('/cash-flow/historical', {
+      params: {
+        monthsBack: monthsBack || 6,
+      },
+    });
 
     if (!response.data.success) {
       throw new Error('Failed to fetch historical data');
@@ -157,7 +146,7 @@ export const getHistoricalData = async (
 
     return response.data.data;
   } catch (error) {
-    if (axios.isAxiosError(error)) {
+    if (isAxiosError(error)) {
       const axiosError = error as AxiosError<{ message?: string }>;
       const errorMessage =
         (axiosError.response?.data as { message?: string } | undefined)?.message ||
@@ -178,17 +167,11 @@ export const getProjections = async (
   forecastDays?: number
 ): Promise<UpcomingPayrollProjection[]> => {
   try {
-    const response = await axios.get<ProjectionsResponse>(
-      `${API_BASE_URL}/api/cash-flow/projections`,
-      {
-        params: {
-          forecastDays: forecastDays || 90,
-        },
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('accessToken') || ''}`,
-        },
-      }
-    );
+    const response = await api.get<ProjectionsResponse>('/cash-flow/projections', {
+      params: {
+        forecastDays: forecastDays || 90,
+      },
+    });
 
     if (!response.data.success) {
       throw new Error('Failed to fetch projections');
@@ -196,7 +179,7 @@ export const getProjections = async (
 
     return response.data.data;
   } catch (error) {
-    if (axios.isAxiosError(error)) {
+    if (isAxiosError(error)) {
       const axiosError = error as AxiosError<{ message?: string }>;
       const errorMessage =
         (axiosError.response?.data as { message?: string } | undefined)?.message ||
@@ -220,14 +203,11 @@ export const getAlerts = async (
   summary: { totalAlerts: number; criticalAlerts: number; warningAlerts: number };
 }> => {
   try {
-    const response = await axios.get<AlertsResponse>(`${API_BASE_URL}/api/cash-flow/alerts`, {
+    const response = await api.get<AlertsResponse>('/cash-flow/alerts', {
       params: {
         forecastDays: params.forecastDays || 90,
         distributionAccount: params.distributionAccount,
         assetIssuer: params.assetIssuer,
-      },
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('accessToken') || ''}`,
       },
     });
 
@@ -237,7 +217,7 @@ export const getAlerts = async (
 
     return response.data.data;
   } catch (error) {
-    if (axios.isAxiosError(error)) {
+    if (isAxiosError(error)) {
       const axiosError = error as AxiosError<{ message?: string }>;
       const errorMessage =
         (axiosError.response?.data as { message?: string } | undefined)?.message ||
