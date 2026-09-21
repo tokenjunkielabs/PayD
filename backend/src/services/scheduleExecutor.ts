@@ -101,6 +101,8 @@ export class ScheduleExecutor {
       let failureCount = 0;
 
       for (const scheduleRow of claimedSchedules) {
+        let executionResult: ExecutionResult;
+
         try {
           const schedule: Schedule = {
             ...scheduleRow,
@@ -115,46 +117,44 @@ export class ScheduleExecutor {
           };
 
           console.log(`[ScheduleExecutor] Executing schedule ID ${schedule.id} (Scheduled for: ${schedule.nextRunTimestamp.toISOString()})`);
+          executionResult = await this.executeSchedule(schedule);
+        } catch (error) {
+          executionResult = {
+            success: false,
+            error: {
+              message: error instanceof Error ? error.message : 'System error in executor',
+              details: error as any,
+            },
+          };
+          console.error(
+            `[ScheduleExecutor] Error executing schedule ID ${scheduleRow.id}:`,
+            error
+          );
+        }
 
-          const executionResult = await this.executeSchedule(schedule);
-
-          await this.recordExecution(schedule.id, executionResult, client);
+        try {
+          // Commit execution history and schedule state before releasing the claim.
+          // If commit fails, the claim stays in place for stale-claim recovery.
+          await this.recordExecution(scheduleRow.id, executionResult, client);
 
           if (executionResult.success) {
             successCount++;
-            console.log(`[ScheduleExecutor] Schedule ID ${schedule.id} executed successfully. Hash: ${executionResult.transactionHash}`);
+            console.log(
+              `[ScheduleExecutor] Schedule ID ${scheduleRow.id} executed successfully. Hash: ${executionResult.transactionHash}`
+            );
           } else {
             failureCount++;
             console.error(
-              `[ScheduleExecutor] Schedule ID ${schedule.id} failed:`,
+              `[ScheduleExecutor] Schedule ID ${scheduleRow.id} failed:`,
               executionResult.error?.message
             );
           }
-        } catch (error) {
+        } catch (recordError) {
           failureCount++;
           console.error(
-            `[ScheduleExecutor] Error processing schedule ID ${scheduleRow.id}:`,
-            error
+            `[ScheduleExecutor] Failed to finalize schedule ID ${scheduleRow.id}; claim retained for recovery:`,
+            recordError
           );
-
-          try {
-            await this.recordExecution(
-              scheduleRow.id,
-              {
-                success: false,
-                error: {
-                  message: error instanceof Error ? error.message : 'System error in executor',
-                  details: error as any,
-                },
-              },
-              client
-            );
-          } catch (recordError) {
-            console.error(
-              `[ScheduleExecutor] Failed to record execution error for schedule ID ${scheduleRow.id}:`,
-              recordError
-            );
-          }
         }
       }
 
@@ -292,10 +292,7 @@ export class ScheduleExecutor {
     try {
       await client.query('BEGIN');
 
-      // Determine execution status
       const status = result.success ? 'success' : 'failed';
-
-      // Insert into execution_history
       const insertQuery = `
         INSERT INTO execution_history (
           schedule_id,
@@ -312,7 +309,7 @@ export class ScheduleExecutor {
 
       const insertValues = [
         scheduleId,
-        new Date(), // executed_at
+        new Date(),
         status,
         result.transactionHash || null,
         result.success ? JSON.stringify({ hash: result.transactionHash }) : null,
@@ -322,33 +319,30 @@ export class ScheduleExecutor {
 
       await client.query(insertQuery, insertValues);
 
-      // Update schedule state on the same claimed connection.
-      // This keeps execution bookkeeping and the final unlock in one transaction.
+      // Use the claim-owning connection so history and schedule-state mutation
+      // commit together without opening a nested transaction.
       await scheduleService.updateAfterExecution(scheduleId, result, client);
-
-      // Release exactly once, and only if this pod still owns the claim.
-      // A missing row or changed owner aborts the bookkeeping transaction instead
-      // of clearing another worker's lock.
-      const releaseResult = await client.query(
-        `UPDATE schedules
-         SET locked_by = NULL, locked_at = NULL
-         WHERE id = $1 AND locked_by = $2
-         RETURNING id`,
-        [scheduleId, this.podId]
-      );
-
-      if (releaseResult.rowCount !== 1) {
-        throw new Error(
-          `Schedule ${scheduleId} lock is no longer owned by executor ${this.podId}`
-        );
-      }
 
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
-    } finally {
-      client.release();
+    }
+
+    // The only unlock happens after execution state has committed, on the same
+    // physical connection, and only while this executor still owns the claim.
+    const releaseResult = await client.query(
+      `UPDATE schedules
+       SET locked_by = NULL, locked_at = NULL
+       WHERE id = $1 AND locked_by = $2
+       RETURNING id`,
+      [scheduleId, this.podId]
+    );
+
+    if (releaseResult.rowCount !== 1) {
+      throw new Error(
+        `Schedule ${scheduleId} lock is no longer owned by executor ${this.podId}`
+      );
     }
   }
 }
